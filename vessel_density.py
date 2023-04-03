@@ -1,9 +1,10 @@
 '''Calculates density of vessel types IT and PT.\n
    First calculates raw number of each vessel type\n
-   by location IT or PT.'''
+   by location IT or PT.\n
+   Expects file names in format ##-###_[<ROI>].csv!'''
 
 # Written by: Austin Schultz (aschultz37)
-# Updated:    02/21/2022
+# Updated:    03/29/2023
 
 import os
 import numpy as np
@@ -53,7 +54,7 @@ def output_dataframe(in_dir, file_path, df):
     file_ext = file_tup[1]
     outfile_path = 'output/' + in_dir + file_tup[0] + file_ext
     if file_ext == '.csv':
-        df.to_csv(outfile_path, header=True, index=False)
+        df.to_csv(outfile_path, header=True, index=True)
     else:
         raise FileExtError    
 
@@ -65,10 +66,11 @@ def make_output_dir(in_dir):
         os.makedirs(outfile_path)
 
 def extract_sample_id(filename):
-    '''Extracts the sample ID from file name.'''
-    # Remove the "Feat_ROI_" and "_Final_trimmed"
-    sample_num = filename[9:-14]
-    return sample_num
+    '''Extracts the sample ID and ROI from file name. Returns as tuple.\n
+       Expects file name in format ##-###_[<ROI>].csv'''
+    sample_num = filename[0:6]
+    roi = filename[7:]
+    return (sample_num, roi)
 
 
 def num_by_location(df, in_file):
@@ -77,10 +79,12 @@ def num_by_location(df, in_file):
     # Create new df listing: ROI name, # Type 1 (IT), ..., # Type 1 (PT), ...
     in_filename = extract_file_tup(in_file)[0]
     sample_num = extract_sample_id(in_filename)
-    data_template = {'ROI': sample_num, '# Type 1 IT': 0, '# Type 2 IT': 0, 
+    data_template = {'Pt Number': sample_num[0],
+                     'Sample ID': sample_num[0] + '_' + sample_num[1],
+                     '# Type 1 IT': 0, '# Type 2 IT': 0, 
                      '# Type 3 IT': 0, '# Type 4 IT': 0, '# Type 5 IT': 0,
-                     '# Type 1 PT': 0, '# Type 2 PT': 0, '# Type 3 PT': 0, 
-                     '# Type 4 PT': 0, '# Type 5 PT': 0}
+                     '# Type 1 PT': 0, '# Type 2 PT': 0, 
+                     '# Type 3 PT': 0, '# Type 4 PT': 0, '# Type 5 PT': 0}
     df_num = pd.DataFrame(data=data_template, index=[0])
     # Loop through df and increment appropriate col for each vessel
     df_t = df.T
@@ -93,18 +97,24 @@ def num_by_location(df, in_file):
 
 def find_it_area(sample_name, in_area):
     '''Finds the IT area for a sample and returns it.'''
-    it_area = in_area.at[sample_name, 'IT Area']
+    try:
+        it_area = in_area.at[sample_name, 'IT Area']
+    except Exception:
+        it_area = -128 # abs(-128) is >> other areas, will be obviously wrong
     return it_area
 
 def find_pt_area(sample_name, in_area):
     '''Finds the PT area for a sample and returns it.'''
-    pt_area = in_area.at[sample_name, 'PT Area']
+    try:
+        pt_area = in_area.at[sample_name, 'PT Area']
+    except Exception:
+        pt_area = -128 # abs(-128) is >> other areas, will be obviously wrong
     return pt_area
 
 def populate_areas(df, in_area):
     '''Creates columns that contain IT and PT area for each sample.'''
-    df['IT Area'] = df['ROI'].map(lambda x: find_it_area(x, in_area))
-    df['PT Area'] = df['ROI'].map(lambda x: find_pt_area(x, in_area))
+    df['IT Area'] = df['Sample ID'].map(lambda x: find_it_area(x, in_area))
+    df['PT Area'] = df['Sample ID'].map(lambda x: find_pt_area(x, in_area))
     return df
 
 def density_by_location(df):
@@ -113,16 +123,15 @@ def density_by_location(df):
        for IT/PT.'''
     # Formula: (no. of vessels IT) / (total IT area) and same for PT
     # Append to df: Density Type 1 (IT), ..., Density Type 1 (PT), ...
-    df['Rho Type 1 IT'] = df['# Type 1 IT'] / df['IT Area']
-    df['Rho Type 2 IT'] = df['# Type 2 IT'] / df['IT Area']
-    df['Rho Type 3 IT'] = df['# Type 3 IT'] / df['IT Area']
-    df['Rho Type 4 IT'] = df['# Type 4 IT'] / df['IT Area']
-    df['Rho Type 5 IT'] = df['# Type 5 IT'] / df['IT Area']
-    df['Rho Type 1 PT'] = df['# Type 1 PT'] / df['PT Area']
-    df['Rho Type 2 PT'] = df['# Type 2 PT'] / df['PT Area']
-    df['Rho Type 3 PT'] = df['# Type 3 PT'] / df['PT Area']
-    df['Rho Type 4 PT'] = df['# Type 4 PT'] / df['PT Area']
-    df['Rho Type 5 PT'] = df['# Type 5 PT'] / df['PT Area']
+    num_vessel_types = 5
+    for i in range(1, num_vessel_types+1, 1):
+        idx = str(i)
+        df['Rho Type ' + idx + ' IT'] = (df['# Type ' + idx + ' IT'] / 
+                                         df['IT Area'])
+    for i in range(1, num_vessel_types+1, 1):
+        idx = str(i)
+        df['Rho Type ' + idx + ' PT'] = (df['# Type ' + idx + ' PT'] / 
+                                         df['PT Area'])
     return df
 
 def merge_roi(all_roi):
@@ -134,6 +143,10 @@ def merge_roi(all_roi):
     df_merged = pd.concat(all_roi, ignore_index=True)
     return df_merged
 
+def merge_patients(df):
+    '''Merges all ROI into one entry per patient by adding columns.'''
+    df_merged_pt = df.groupby(by='Pt Number').sum(numeric_only=False)
+    return df_merged_pt
 
 # Main program
 in_dir = dir_input()
@@ -146,10 +159,13 @@ for in_file in os.listdir(in_dir):
     df_num = num_by_location(df, in_file)
     all_roi.append(df_num)
 # merge all ROI into one dataframe
-df_merged = merge_roi(all_roi)
-# calculate density for each ROI
-df_areas = populate_areas(df_merged, in_area)
-df_density = density_by_location(df_areas)
+df_merged_roi = merge_roi(all_roi)
+# find the areas for each ROI
+df_areas = populate_areas(df_merged_roi, in_area)
+# merge all entries by patient
+df_merged_pt = merge_patients(df_areas)
+# calculate vessel densities for each patient
+df_density = density_by_location(df_merged_pt)
 # output the dataframe    
 make_output_dir(in_dir)
 output_dataframe(in_dir, 'vessel_density.csv', df_density)
